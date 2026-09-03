@@ -117,7 +117,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Patch CARE_MWL_Service App.config (if CARE settings provided)
+      # Two services talk to CARE, through DIFFERENTLY NAMED keys in separate
+      # config files. Patching only the MWL service leaves image upload and the
+      # study webhook pointing at whatever is committed, which is the shared
+      # staging server:
+      #
+      #   CARE_MWL_Service  careBaseUrl    -> worklist C-FIND, MPPS webhook
+      #                     careToken
+      #   CARE_SCU_Service  careBackendURL -> DICOM upload, study webhook
+      #                     staticAPIKey
+      #
+      # The root App.config (CARE_DICOM_Enabler.exe.config) carries a stale
+      # copy of the SCU keys that no code reads; it is patched too so the
+      # archive does not ship the staging URL and token in a third place.
+      - name: Patch CARE settings into all service App.config files
         shell: pwsh
         run: |
           $serverUrl = "$env:CARE_BASE_URL"
@@ -131,35 +144,71 @@ jobs:
             exit 0
           }
 
-          Write-Output "Patching CARE_MWL_Service App.config with custom CARE settings..."
+          # Keys whose values are credentials: log a length, never the value.
+          $secretKeys = @('careToken', 'staticAPIKey', 'jwtToken')
 
-          [xml]$xml = Get-Content "CARE_MWL_Service\App.config"
-          $s = $xml.configuration.appSettings.add
+          function Update-ConfigFile([string]$path, [hashtable]$settings) {
+            if (-not (Test-Path $path)) {
+              Write-Warning "$path not found - skipped"
+              return
+            }
 
-          # Only patch values that were provided (not empty)
-          if ($backend -ne '') {
-            ($s | Where-Object key -eq "backend").value = $backend
-            Write-Output "  - Backend: $backend"
-          }
-          if ($serverUrl -ne '') {
-            ($s | Where-Object key -eq "careBaseUrl").value = $serverUrl
-            Write-Output "  - Server URL: $serverUrl"
-          }
-          if ($apiToken -ne '') {
-            ($s | Where-Object key -eq "careToken").value = $apiToken
-            Write-Output "  - API Token: (set, $($apiToken.Length) chars)"
-          }
-          if ($modality -ne '') {
-            ($s | Where-Object key -eq "careModality").value = $modality
-            Write-Output "  - Modality: $modality"
-          }
-          if ($fromDate -ne '') {
-            ($s | Where-Object key -eq "careFromDate").value = $fromDate
-            Write-Output "  - From Date: $fromDate"
+            [xml]$xml = Get-Content $path
+            $adds = $xml.configuration.appSettings.add
+            Write-Output "Patching $path"
+            $applied = 0
+
+            foreach ($key in $settings.Keys) {
+              $value = $settings[$key]
+              if ([string]::IsNullOrEmpty($value)) { continue }
+
+              $node = $adds | Where-Object key -eq $key
+              if ($null -eq $node) {
+                Write-Warning "  key '$key' absent from $path - skipped"
+                continue
+              }
+
+              $node.value = $value
+              $applied++
+
+              if ($secretKeys -contains $key) {
+                Write-Output "  - $key = (set, $($value.Length) chars)"
+              } else {
+                Write-Output "  - $key = $value"
+              }
+            }
+
+            if ($applied -gt 0) {
+              $xml.Save((Resolve-Path $path).Path)
+              Write-Output "  saved ($applied setting(s))"
+            } else {
+              Write-Output "  nothing to change"
+            }
           }
 
-          $xml.Save((Resolve-Path "CARE_MWL_Service\App.config").Path)
-          Write-Output "App.config patched successfully - settings baked into EXE"
+          # Worklist + MPPS webhook
+          Update-ConfigFile "CARE_MWL_Service\App.config" @{
+            backend      = $backend
+            careBaseUrl  = $serverUrl
+            careToken    = $apiToken
+            careModality = $modality
+            careFromDate = $fromDate
+          }
+
+          # DICOM upload + study webhook
+          Update-ConfigFile "CARE_SCU_Service\App.config" @{
+            careBackendURL = $serverUrl
+            staticAPIKey   = $apiToken
+          }
+
+          # Stale duplicates shipped in CARE_DICOM_Enabler.exe.config
+          Update-ConfigFile "App.config" @{
+            careBackendURL = $serverUrl
+            staticAPIKey   = $apiToken
+          }
+
+          Write-Output ""
+          Write-Output "All CARE settings baked in - every service now targets the same server."
 
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2

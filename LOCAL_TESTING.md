@@ -142,6 +142,57 @@ value it applied, with the token reduced to a length:
 nothing resolved — the names are misspelled, or they were added to the wrong
 tab, or to the upstream repository rather than your fork.
 
+### Which files hold the server URL
+
+**Two services call CARE, through differently named keys in separate config
+files.** This matters because setting only the worklist URL leaves image
+upload pointing at the shared staging server, and the upload still succeeds —
+so nothing looks wrong until you notice studies arriving on the wrong host.
+
+| Service | Key | Drives |
+|---|---|---|
+| `CARE_MWL_Service` | `careBaseUrl` / `careToken` | Worklist C-FIND, MPPS status webhook |
+| `CARE_SCU_Service` | `careBackendURL` / `staticAPIKey` | DICOM image upload, study webhook |
+
+Both send the credential as a bare `Authorization` header with no scheme
+prepended (`WorklistItemsProvider.cs:332`, `MppsHandler.cs:76`,
+`Plexus_SCU_Service.cs:139` and `:213`), so a single `CARE_API_TOKEN` secret
+covers `careToken` and `staticAPIKey` alike.
+
+The root `App.config`, which becomes `CARE_DICOM_Enabler.exe.config`, carries
+a third copy of `careBackendURL` and `staticAPIKey` that no code reads. The
+build patches it anyway so the archive does not ship the staging URL and
+token in a file someone might later wire up.
+
+`careBackendURL` is `TrimEnd('/')`-ed at `Plexus_SCU_Service.cs:61`, so a
+trailing slash is harmless there. `careBaseUrl` is not — see §2 above.
+
+### Repointing an install you have already extracted
+
+These are plain XML files sitting beside the executables, so there is no need
+to rebuild. In the extracted folder, edit **both**:
+
+| File | Key to change |
+|---|---|
+| `CARE_MWL_Service.exe.config` | `careBaseUrl`, `careToken` |
+| `CARE_SCU_Service.exe.config` | `careBackendURL`, `staticAPIKey` |
+
+Then restart the services so .NET re-reads them — `ConfigurationManager`
+loads the file once at process start:
+
+```powershell
+Restart-Service CAREMWL, CARESCU
+```
+
+Confirm from the logs that the upload target changed:
+
+```powershell
+Select-String -Path logs\*.txt -Pattern "Uploading to" | Select-Object -Last 3
+```
+
+Any line still naming `staging.carehmis.dpdns.org` means the SCU service is
+running with the old config, or was not restarted.
+
 ### Precedence
 
 Each setting resolves to the first non-empty value of:
