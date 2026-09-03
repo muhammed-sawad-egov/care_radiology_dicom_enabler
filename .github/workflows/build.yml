@@ -100,7 +100,7 @@ jobs:
   build:
     runs-on: windows-latest
 
-    # Resolve CARE settings once: manual input wins, then repository secret.
+    # Resolve CARE settings once: manual input wins, then repository secret/var.
     # Reading these through env (rather than inline ${{ }} in the script) keeps
     # GitHub's secret masking intact and avoids shell injection.
     env:
@@ -238,6 +238,36 @@ jobs:
           Copy-Item cfg\common.cfg "$binPath\cfg\common.cfg"
           New-Item -ItemType Directory -Force -Path "$binPath\logs"
           Write-Output "Configuration files and directories created in $binPath"
+
+      - name: Copy Emulator initializer scripts
+        shell: pwsh
+        run: |
+          $config  = "${{ inputs.build_configuration || 'Release' }}"
+          $binPath = "bin\$config"
+
+          New-Item -ItemType Directory -Force -Path "$binPath\Emulator" | Out-Null
+
+          # Copy whatever the Emulator folder actually contains. Naming the
+          # individual initializer files here would fail the whole build when
+          # one is absent, because Actions runs pwsh with
+          # $ErrorActionPreference = 'stop'.
+          $src = Get-ChildItem -Path "Emulator" -File -ErrorAction SilentlyContinue
+          if (-not $src) {
+            Write-Warning "Emulator folder is empty or missing - nothing to copy"
+          } else {
+            foreach ($f in $src) {
+              Copy-Item $f.FullName "$binPath\Emulator\$($f.Name)" -Force
+              Write-Output "Copied: Emulator\$($f.Name) ($([math]::Round($f.Length / 1KB)) KB)"
+            }
+          }
+
+          # Flag the initializer scripts as absent rather than failing: they are
+          # not in the repository yet, only Modality-Emulator-*.zip is.
+          foreach ($want in @("Initializer.bat", "Initializer.ps1", "schema.sql")) {
+            if (-not (Test-Path "$binPath\Emulator\$want")) {
+              Write-Warning "Emulator\$want not found in the repository - skipped"
+            }
+          }
 
       - name: Set short SHA and artifact suffix
         shell: pwsh

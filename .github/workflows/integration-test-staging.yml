@@ -47,6 +47,15 @@ jobs:
   dicom-staging-test:
     runs-on: windows-latest
 
+    # Resolve the target server once: manual input, then repository
+    # secret/variable, then the shared default. There is deliberately no
+    # fallback token - see the guard in the patch step below.
+    env:
+      CARE_BASE_URL:  ${{ inputs.care_server_url || secrets.CARE_BASE_URL || 'https://staging.carehmis.dpdns.org' }}
+      CARE_API_TOKEN: ${{ inputs.care_api_token  || secrets.CARE_API_TOKEN }}
+      CARE_MODALITY:  ${{ inputs.care_modality   || vars.CARE_MODALITY  || 'CT' }}
+      CARE_FROM_DATE: ${{ inputs.care_from_date  || vars.CARE_FROM_DATE || '2024-01-01 00:00:00' }}
+
     steps:
       # -- 1. Checkout --------------------------------------------------------
       - name: Checkout
@@ -59,10 +68,18 @@ jobs:
         shell: pwsh
         run: |
           # Get values from inputs or use defaults
-          $serverUrl  = "${{ inputs.care_server_url || 'https://staging.carehmis.dpdns.org' }}"
-          $apiToken   = "${{ inputs.care_api_token || 'RADOMSECRET' }}"
-          $modality   = "${{ inputs.care_modality || 'CT' }}"
-          $fromDate   = "${{ inputs.care_from_date || '2024-01-01 00:00:00' }}"
+          $serverUrl  = "$env:CARE_BASE_URL"
+          $apiToken   = "$env:CARE_API_TOKEN"
+          $modality   = "$env:CARE_MODALITY"
+          $fromDate   = "$env:CARE_FROM_DATE"
+
+          # The shared 'RADOMSECRET' default was removed: a fork inheriting the
+          # nightly schedule would otherwise hit the shared staging server with
+          # a credential its owner never chose. Fail loudly instead.
+          if (-not $apiToken) {
+            Write-Error "No API token. Set the CARE_API_TOKEN repository secret, or pass care_api_token when running manually."
+            exit 1
+          }
 
           [xml]$xml = Get-Content "CARE_MWL_Service\App.config"
           $s = $xml.configuration.appSettings.add
@@ -296,8 +313,8 @@ jobs:
       - name: "Test - C-FIND worklist query (from CARE Server)"
         shell: pwsh
         run: |
-          $serverUrl = "${{ inputs.care_server_url || 'https://staging.carehmis.dpdns.org' }}"
-          $modality  = "${{ inputs.care_modality || 'CT' }}"
+          $serverUrl = "$env:CARE_BASE_URL"
+          $modality  = "$env:CARE_MODALITY"
 
           Write-Output "Querying worklist from CARE Server..."
           Write-Output "  - Server: $serverUrl"
@@ -315,8 +332,8 @@ jobs:
       - name: Validate CARE API Connection and Extract Worklist Item
         shell: pwsh
         run: |
-          $serverUrl = "${{ inputs.care_server_url || 'https://staging.carehmis.dpdns.org' }}"
-          $modality  = "${{ inputs.care_modality || 'CT' }}"
+          $serverUrl = "$env:CARE_BASE_URL"
+          $modality  = "$env:CARE_MODALITY"
 
           Write-Output "Validating CARE API connection and extracting worklist item..."
           Write-Output "  - Server: $serverUrl"
@@ -351,7 +368,7 @@ jobs:
             # Check if items were fetched and extract accession numbers
             if ($content -match "Successfully fetched(?: and populated)? (\d+) worklist items") {
               $count = $matches[1]
-              $fromDate = "${{ inputs.care_from_date || '2024-01-01 00:00:00' }}"
+              $fromDate = "$env:CARE_FROM_DATE"
               Write-Output "✓ CARE API Connection: Successfully fetched $count worklist items"
 
               # Extract accession numbers from log
@@ -656,7 +673,7 @@ jobs:
         shell: pwsh
         run: |
           $accessionNo = $env:WORKFLOW_ACCESSION_NO
-          $serverUrl = "${{ inputs.care_server_url || 'https://staging.carehmis.dpdns.org' }}"
+          $serverUrl = "$env:CARE_BASE_URL"
 
           Write-Output "=== E2E WORKFLOW VERIFICATION ==="
           Write-Output ""
@@ -783,9 +800,9 @@ jobs:
             Remove-Service $svc       -ErrorAction SilentlyContinue
           }
 
-          $serverUrl = "${{ inputs.care_server_url || 'https://staging.carehmis.dpdns.org' }}"
-          $modality  = "${{ inputs.care_modality || 'CT' }}"
-          $fromDate  = "${{ inputs.care_from_date || '2024-01-01 00:00:00' }}"
+          $serverUrl = "$env:CARE_BASE_URL"
+          $modality  = "$env:CARE_MODALITY"
+          $fromDate  = "$env:CARE_FROM_DATE"
 
           Write-Output "=== CARE Server Integration Test Logs ==="
           Write-Output "Test Configuration:"

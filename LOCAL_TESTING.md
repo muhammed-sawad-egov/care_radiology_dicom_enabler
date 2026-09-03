@@ -123,7 +123,16 @@ override any of them for a single manual run without changing them.
 The artifact is a zip named
 `CARE_DICOM_Enabler-Release-AnyCPU-custom-CT-CARE-main-<run>-<sha>`
 containing the whole `bin\Release\` tree: the WinForms UI, the four Windows
-services, `cfg\common.cfg` and an empty `logs\` directory.
+services, `cfg\common.cfg`, an empty `logs\` directory, and `Emulator\` with
+whatever that folder holds — currently just `Modality-Emulator-3.1.5.0.zip`.
+
+> The build copies every file present in `Emulator\`, rather than naming
+> `Initializer.bat`, `Initializer.ps1` and `schema.sql` individually. Those
+> three are not in the repository yet, and GitHub Actions runs `pwsh` with
+> `$ErrorActionPreference = 'stop'`, so a `Copy-Item` naming a missing file
+> fails the step and no artifact is produced at all. The step logs a warning
+> for each absent initializer instead. Once the scripts are committed to
+> `Emulator\`, they are picked up automatically with no workflow change.
 
 > The API token is written in cleartext into `CARE_MWL_Service.exe.config`
 > inside this archive, and GitHub Actions artifacts are downloadable by anyone
