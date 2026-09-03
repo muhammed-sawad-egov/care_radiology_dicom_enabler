@@ -77,18 +77,41 @@ that repository, delete the workflow or the run will fail on every push.
 
 The build workflow reads the CARE connection settings and bakes them into
 `CARE_MWL_Service.exe.config`. Set them once under
-**Settings → Secrets and variables → Actions** in your new repository.
+**Settings → Secrets and variables → Actions**.
+
+Secrets and variables are per-repository, so these must be set on **your
+fork**, not upstream. Enable Actions first (§3) or the pages are inert.
 
 ### Secrets tab
 
-Values here are masked in workflow logs.
+<https://github.com/muhammed-sawad-egov/care_radiology_dicom_enabler/settings/secrets/actions>
+→ **New repository secret**. Values here are masked in workflow logs.
 
 | Secret | Example | Purpose |
 |---|---|---|
 | `CARE_BASE_URL` | `https://care.example.org` | Your CARE instance, no trailing slash |
-| `CARE_API_TOKEN` | *your radiology plugin token* | Authenticates worklist and webhook calls |
+| `CARE_API_TOKEN` | *see below* | Authenticates worklist and webhook calls |
+
+**`CARE_API_TOKEN` must be the complete `Authorization` header value.** Both
+call sites add it to the header verbatim, with no scheme prepended:
+
+```csharp
+// WorklistItemsProvider.cs:332 and MppsHandler.cs:76
+client.DefaultRequestHeaders.Add("Authorization", token);
+```
+
+So if your CARE instance expects `Authorization: Bearer abc123`, the secret
+must contain `Bearer abc123`, not `abc123`. Storing the bare token is the
+most common cause of a `403 Forbidden` in `logs\WorklistItems*.txt`.
+
+**`CARE_BASE_URL` must not end in a slash.** It is string-concatenated at
+`WorklistItemsProvider.cs:322`, so a trailing slash produces a double slash
+in the request path.
 
 ### Variables tab
+
+<https://github.com/muhammed-sawad-egov/care_radiology_dicom_enabler/settings/variables/actions>
+→ **New repository variable**.
 
 These appear in the artifact filename, so they must **not** be secrets —
 GitHub would mask them to `***` and corrupt the name.
@@ -99,7 +122,25 @@ GitHub would mask them to `***` and corrupt the name.
 | `CARE_MODALITY` | `CT` | Modality filter; leave unset for all modalities |
 | `CARE_FROM_DATE` | `2025-01-01 08:00:00` | Earliest worklist entry to fetch |
 
-Set `CARE_BACKEND` to `2` — that is the mode which queries your CARE server.
+Set `CARE_BACKEND` to `2`. It selects the mode that queries your CARE server,
+and `MppsHandler.cs:42-46` returns early for any other value — so with the
+wrong backend the MPPS status webhooks are skipped silently, with no error.
+
+### Confirming they were picked up
+
+The **Patch CARE_MWL_Service App.config** step in the run log prints each
+value it applied, with the token reduced to a length:
+
+```
+  - Backend: 2
+  - Server URL: https://care.example.org
+  - API Token: (set, 47 chars)
+  - Modality: CT
+```
+
+`No CARE settings supplied - keeping App.config defaults.` instead means
+nothing resolved — the names are misspelled, or they were added to the wrong
+tab, or to the upstream repository rather than your fork.
 
 ### Precedence
 
