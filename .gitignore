@@ -366,3 +366,12 @@ MigrationBackup/
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
 *.md
+!LOCAL_TESTING.md
+
+# The care_radiology CARE backend plugin is a separate repository.
+# Committing it here would create a broken embedded-repo gitlink.
+care_radiology/
+
+# Local machine overrides - never commit real CARE credentials
+cfg/common.local.cfg
+*.local.config

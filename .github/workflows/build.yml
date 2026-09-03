@@ -11,6 +11,23 @@ name: Build CARE DICOM Enabler
 #     - CARE API Token
 #     - DICOM Modality Filter
 #     - Worklist From Date
+#
+# CARE settings resolve in this order (first non-empty wins):
+#   1. workflow_dispatch input   - one-off override for a manual run
+#   2. repository secret / var   - the standing default
+#   3. App.config committed value
+#
+# Configure the standing defaults once under
+# Settings > Secrets and variables > Actions.
+#
+#   Secrets tab (masked in logs):
+#     CARE_BASE_URL    e.g. https://care.example.org
+#     CARE_API_TOKEN   the radiology plugin API token
+#
+#   Variables tab (appear in the artifact filename, so not secrets):
+#     CARE_MODALITY    optional, e.g. CT   (leave unset for all modalities)
+#     CARE_FROM_DATE   optional, e.g. 2025-01-01 08:00:00
+#     CARE_BACKEND     optional, 0=List 1=Database 2=CARE Server
 
 on:
   push:
@@ -83,19 +100,36 @@ jobs:
   build:
     runs-on: windows-latest
 
+    # Resolve CARE settings once: manual input wins, then repository secret.
+    # Reading these through env (rather than inline ${{ }} in the script) keeps
+    # GitHub's secret masking intact and avoids shell injection.
+    env:
+      # Sensitive -> Secrets (masked in logs)
+      CARE_BASE_URL:  ${{ inputs.care_server_url != '' && inputs.care_server_url || secrets.CARE_BASE_URL }}
+      CARE_API_TOKEN: ${{ inputs.care_api_token  != '' && inputs.care_api_token  || secrets.CARE_API_TOKEN }}
+      # Non-sensitive -> Variables. These end up in the artifact filename, and a
+      # masked secret would render there as "***", so they must not be secrets.
+      CARE_MODALITY:  ${{ inputs.care_modality   != '' && inputs.care_modality   || vars.CARE_MODALITY }}
+      CARE_FROM_DATE: ${{ inputs.care_from_date  != '' && inputs.care_from_date  || vars.CARE_FROM_DATE }}
+      CARE_BACKEND:   ${{ inputs.care_backend    != '' && inputs.care_backend    || vars.CARE_BACKEND }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Patch CARE_MWL_Service App.config (if CARE settings provided)
-        if: ${{ inputs.care_server_url != '' || inputs.care_api_token != '' || inputs.care_modality != '' || inputs.care_backend != '' }}
         shell: pwsh
         run: |
-          $serverUrl = "${{ inputs.care_server_url }}"
-          $apiToken  = "${{ inputs.care_api_token }}"
-          $modality  = "${{ inputs.care_modality }}"
-          $fromDate  = "${{ inputs.care_from_date }}"
-          $backend   = "${{ inputs.care_backend }}"
+          $serverUrl = "$env:CARE_BASE_URL"
+          $apiToken  = "$env:CARE_API_TOKEN"
+          $modality  = "$env:CARE_MODALITY"
+          $fromDate  = "$env:CARE_FROM_DATE"
+          $backend   = "$env:CARE_BACKEND"
+
+          if (-not ($serverUrl -or $apiToken -or $modality -or $fromDate -or $backend)) {
+            Write-Output "No CARE settings supplied - keeping App.config defaults."
+            exit 0
+          }
 
           Write-Output "Patching CARE_MWL_Service App.config with custom CARE settings..."
 
@@ -113,7 +147,7 @@ jobs:
           }
           if ($apiToken -ne '') {
             ($s | Where-Object key -eq "careToken").value = $apiToken
-            Write-Output "  - API Token: $($apiToken.Substring(0, [Math]::Min(4, $apiToken.Length)))***"
+            Write-Output "  - API Token: (set, $($apiToken.Length) chars)"
           }
           if ($modality -ne '') {
             ($s | Where-Object key -eq "careModality").value = $modality
@@ -143,9 +177,9 @@ jobs:
           $platform  = "${{ inputs.build_platform || 'Any CPU' }}"
           $parallel  = "${{ inputs.parallel_build }}"
           $artifact  = "${{ inputs.upload_artifact }}"
-          $serverUrl = "${{ inputs.care_server_url }}"
-          $modality  = "${{ inputs.care_modality }}"
-          $backend   = "${{ inputs.care_backend }}"
+          $serverUrl = "$env:CARE_BASE_URL"
+          $modality  = "$env:CARE_MODALITY"
+          $backend   = "$env:CARE_BACKEND"
 
           Write-Output "Build Configuration:"
           Write-Output "  - Configuration: $config"
@@ -211,9 +245,9 @@ jobs:
           echo "SHORT_SHA=$($env:GITHUB_SHA.Substring(0,7))" >> $env:GITHUB_ENV
 
           # Add suffix if CARE settings are customized
-          $serverUrl = "${{ inputs.care_server_url }}"
-          $modality  = "${{ inputs.care_modality }}"
-          $backend   = "${{ inputs.care_backend }}"
+          $serverUrl = "$env:CARE_BASE_URL"
+          $modality  = "$env:CARE_MODALITY"
+          $backend   = "$env:CARE_BACKEND"
 
           if ($serverUrl -ne '' -or $modality -ne '' -or $backend -ne '') {
             $suffix = "-custom"
