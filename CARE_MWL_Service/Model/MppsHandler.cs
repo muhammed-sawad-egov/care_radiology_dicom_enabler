@@ -20,6 +20,13 @@ namespace Worklist_SCP.Model
     class MppsHandler : IMppsSource
     {
 
+        // Must match CARE's VALID_MPPS_STATUSES, and more importantly the TagConfig.display values
+        // the webhook looks the status up by - an unrecognised string is answered with
+        // 400 "Tag configuration not found for status: ...", not a validation error.
+        private const string ScanStartedStatus = "SCAN_STARTED";
+        private const string ScanCompletedStatus = "SCAN_COMPLETED";
+        private const string ScanDiscontinuedStatus = "DISCONTINUED";
+
         public static Dictionary<string, WorklistItem> PendingProcedures { get; } = new Dictionary<string, WorklistItem>();
 
         private readonly ILogger _logger;
@@ -118,7 +125,7 @@ namespace Worklist_SCP.Model
             PendingProcedures.Add(sopInstanceUID, workItem);
 
             // Send status update to CARE server
-            Task.Run(() => SendStatusToCareServerAsync(workItem.ServiceRequestId, workItem.FacilityId, "Scan Started"));
+            Task.Run(() => SendStatusToCareServerAsync(workItem.ServiceRequestId, workItem.FacilityId, ScanStartedStatus));
 
             return true;
         }
@@ -138,7 +145,7 @@ namespace Worklist_SCP.Model
             _logger.Info($"[MPPS] SetDiscontinued: ServiceRequestId={workItem.ServiceRequestId} AccessionNumber={workItem.AccessionNumber} for SOPInstanceUID={sopInstanceUID}");
 
             // Send status update to CARE server
-            Task.Run(() => SendStatusToCareServerAsync(workItem.ServiceRequestId, workItem.FacilityId, "Scan Cancelled"));
+            Task.Run(() => SendStatusToCareServerAsync(workItem.ServiceRequestId, workItem.FacilityId, ScanDiscontinuedStatus));
 
             // since the procedure was stopped, we remove it from the list of pending procedures
             PendingProcedures.Remove(sopInstanceUID);
@@ -164,7 +171,7 @@ namespace Worklist_SCP.Model
             // the DICOM logfiles to see which informations the vendor sends
 
             // Send status update to CARE server
-            Task.Run(() => SendStatusToCareServerAsync(workItem.ServiceRequestId, workItem.FacilityId, "Scan Completed"));
+            Task.Run(() => SendStatusToCareServerAsync(workItem.ServiceRequestId, workItem.FacilityId, ScanCompletedStatus));
 
             // since the procedure was completed, we remove it from the list of pending procedures
             PendingProcedures.Remove(sopInstanceUID);

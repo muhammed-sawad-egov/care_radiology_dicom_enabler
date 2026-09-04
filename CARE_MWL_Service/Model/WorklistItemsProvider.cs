@@ -250,7 +250,11 @@ namespace Worklist_SCP.Model
                         //mwlItem.PatientID = "10101";
                         //mwlItem.AccessionNumber = "26042022100448";
                         //mwlItem.Sex = "F";
-                        mwlItem.Modality = item.service_request != null ? item.service_request.modality ?? "CR" : "CR";
+                        // The worklist API echoes back the modality filter that was queried with, so an
+                        // unfiltered query yields "" rather than null - null-coalescing alone leaves
+                        // Modality (0008,0060) empty, which is not legal for a Type 1 element.
+                        var careModality = item.service_request?.modality;
+                        mwlItem.Modality = string.IsNullOrWhiteSpace(careModality) ? "CR" : careModality;
                         mwlItem.ExamDescription = item.service_request != null ? item.service_request.name ?? string.Empty : string.Empty;
                         mwlItem.HospitalName = item.facility != null ? item.facility.name ?? "CARE" : "CARE";
                         mwlItem.FacilityId = item.facility != null ? item.facility.id ?? string.Empty : string.Empty;
@@ -261,7 +265,10 @@ namespace Worklist_SCP.Model
                         // resolve to the first CurrentWorklistItems entry regardless of which procedure was performed.
                         mwlItem.ProcedureStepID = mwlItem.AccessionNumber;
                         mwlItem.ProcedureID = DeriveProcedureIdFromAccessionNumber(mwlItem.AccessionNumber);
-                        mwlItem.StudyUID = "1.2.34.567890.1234567890.1";// string.Empty;
+                        // Was a hardcoded constant shared by every item, which would have filed every
+                        // patient's images into a single study had it ever been sent. Derived from the
+                        // service request id instead so it is unique per order and stable across polls.
+                        mwlItem.StudyUID = DeriveStudyUidFromServiceRequestId(mwlItem.ServiceRequestId);
                         mwlItem.ScheduledAET = ConfigurationManager.AppSettings["careScheduledAET"]?.ToString() ?? "OEC9800";
                         mwlItem.ReferringPhysician = FormatReferringPhysician(item.service_request?.created_by);
                         mwlItem.TechnicianInstruction = item.service_request?.technician_instruction ?? string.Empty;
@@ -520,6 +527,60 @@ namespace Worklist_SCP.Model
                 long numeric = Math.Abs(hash % 1_000_000_000_000_000L);
                 return numeric.ToString();
             }
+        }
+
+        /// <summary>
+        /// Derives a stable Study Instance UID (0020,000D) from the CARE service request id.
+        /// </summary>
+        /// <remarks>
+        /// StudyInstanceUID is Type 1 both in the MWL C-FIND response and in the MPPS
+        /// ScheduledStepAttributesSequence, so a modality that never receives one cannot build a
+        /// valid MPPS message - it sends an empty scheduled step sequence instead, and the status
+        /// update can no longer be correlated back to a worklist item.
+        ///
+        /// The UID must also be the SAME on every worklist poll for a given order: it is what the
+        /// study is filed under in the PACS, and what the modality echoes back in MPPS. A freshly
+        /// generated UID per query would scatter one study across many, and a shared constant
+        /// would collapse every patient's images into one study.
+        ///
+        /// Uses the UUID-derived OID form from DICOM PS3.5 B.2 ("2.25." followed by the UUID's
+        /// 128-bit integer value), which is globally unique without needing a registered org root
+        /// and is reproducible by anyone holding the same service request id.
+        /// </remarks>
+        private static string DeriveStudyUidFromServiceRequestId(string serviceRequestId)
+        {
+            if (string.IsNullOrWhiteSpace(serviceRequestId))
+            {
+                return string.Empty;
+            }
+
+            Guid guid;
+            if (!Guid.TryParse(serviceRequestId, out guid))
+            {
+                return string.Empty;
+            }
+
+            // Guid.ToByteArray() is little-endian for the first three fields; RFC 4122 orders the
+            // 128 bits big-endian, so reorder before widening to an integer.
+            byte[] guidBytes = guid.ToByteArray();
+            byte[] bigEndian = new byte[]
+            {
+                guidBytes[3], guidBytes[2], guidBytes[1], guidBytes[0],
+                guidBytes[5], guidBytes[4],
+                guidBytes[7], guidBytes[6],
+                guidBytes[8], guidBytes[9], guidBytes[10], guidBytes[11],
+                guidBytes[12], guidBytes[13], guidBytes[14], guidBytes[15]
+            };
+
+            // BigInteger takes little-endian input; append a zero byte to force a positive value.
+            byte[] unsignedLittleEndian = new byte[bigEndian.Length + 1];
+            for (int i = 0; i < bigEndian.Length; i++)
+            {
+                unsignedLittleEndian[i] = bigEndian[bigEndian.Length - 1 - i];
+            }
+
+            var value = new System.Numerics.BigInteger(unsignedLittleEndian);
+            return "2.25." + value.ToString();
         }
 
         private async Task<string> authAndGetDetailsAsync()

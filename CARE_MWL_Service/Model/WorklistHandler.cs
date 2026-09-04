@@ -97,15 +97,15 @@ namespace Worklist_SCP.Model
                 AddIfExistsInRequest(resultDataset, request, DicomTag.PatientBirthDate, result.DateOfBirth); // T2
                 AddIfExistsInRequest(resultDataset, request, DicomTag.PatientSex, result.Sex); //T2
 
-                // Code Modified by AR -  19-05-2022
-                //string studyUID = string.Empty;
-                //if (result.StudyUID == null || result.StudyUID == string.Empty || result.StudyUID == "0" )
-                //{
-                //    studyUID = DicomUID.Generate().UID;
-                //}
-                //else
-                //    studyUID = result.StudyUID;
-                //AddIfExistsInRequest(resultDataset, request, DicomTag.StudyInstanceUID, studyUID); // T1
+                // StudyInstanceUID is Type 1 here and Type 1 again inside the MPPS
+                // ScheduledStepAttributesSequence. Omitting it leaves the modality with no Type 1
+                // value to build that sequence from, so it sends the sequence empty and MPPS can
+                // never be correlated back to this worklist item.
+                //
+                // The value is derived from the CARE service request id upstream, so it is stable
+                // across worklist polls. Do NOT fall back to DicomUID.Generate() here: a fresh UID
+                // on every C-FIND would hand the modality a different study identity each poll.
+                AddIfExistsInRequest(resultDataset, request, DicomTag.StudyInstanceUID, result.StudyUID); // T1
 
                 AddIfExistsInRequest(resultDataset, request, DicomTag.RequestingPhysician, result.ReferringPhysician); //T2
                 AddIfExistsInRequest(resultDataset, request, DicomTag.RequestedProcedureDescription, result.ExamDescription); //T1C
