@@ -201,10 +201,15 @@ jobs:
             staticAPIKey   = $apiToken
           }
 
-          # Stale duplicates shipped in CARE_DICOM_Enabler.exe.config
+          # Stale duplicates shipped in CARE_DICOM_Enabler.exe.config. The
+          # WinForms UI reads cfg\common.cfg via cls_PlexusConfig, never its own
+          # .exe.config, so nothing consumes these - they are rewritten only so
+          # the archive stops shipping the staging URL in a third place.
+          $authUrl = if ($serverUrl) { "$($serverUrl.TrimEnd('/'))/api/token/" } else { '' }
           Update-ConfigFile "App.config" @{
             careBackendURL = $serverUrl
             staticAPIKey   = $apiToken
+            authURL        = $authUrl
           }
 
           Write-Output ""
@@ -287,6 +292,30 @@ jobs:
           Copy-Item cfg\common.cfg "$binPath\cfg\common.cfg"
           New-Item -ItemType Directory -Force -Path "$binPath\logs"
           Write-Output "Configuration files and directories created in $binPath"
+
+          # common.cfg is read by CARE.Common (cls_PlexusConfig), not by
+          # ConfigurationManager, so the App.config patching above never touches
+          # it. Its authURL is what CARE_Auth_Service authenticates the app user
+          # against (PlexusAuthService.cs:234 -> WebRequest.Create at :139), and
+          # a failure there stops the DICOM services - so it must not be left
+          # pointing at the shared staging server.
+          #
+          # connectString / uname / pwd are deliberately NOT rewritten: they are
+          # AES-encrypted and the workflow holds no plaintext to re-encrypt.
+          # Regenerate them locally with the GenerateConnectionString project -
+          # see LOCAL_TESTING.md section 4.3.
+          if ($env:CARE_BASE_URL) {
+            $cfgPath = "$binPath\cfg\common.cfg"
+            [xml]$cfg = Get-Content $cfgPath
+            $node = $cfg.SelectSingleNode('/configurations/authURL')
+            if ($node) {
+              $node.InnerText = "$($env:CARE_BASE_URL.TrimEnd('/'))/api/token/"
+              $cfg.Save((Resolve-Path $cfgPath).Path)
+              Write-Output "  - cfg\common.cfg authURL = $($node.InnerText)"
+            } else {
+              Write-Warning "  authURL element absent from common.cfg - skipped"
+            }
+          }
 
       - name: Copy Emulator initializer scripts
         shell: pwsh

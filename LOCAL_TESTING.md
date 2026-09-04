@@ -167,6 +167,33 @@ token in a file someone might later wire up.
 `careBackendURL` is `TrimEnd('/')`-ed at `Plexus_SCU_Service.cs:61`, so a
 trailing slash is harmless there. `careBaseUrl` is not — see §2 above.
 
+### What the build does and does not rewrite
+
+| File in the archive | Status |
+|---|---|
+| `CARE_MWL_Service.exe.config` | Patched — `careBaseUrl`, `careToken`, `careModality`, `careFromDate`, `backend` |
+| `CARE_SCU_Service.exe.config` | Patched — `careBackendURL`, `staticAPIKey` |
+| `CARE_DICOM_Enabler.exe.config` | Patched — `careBackendURL`, `staticAPIKey`, `authURL`. **Nothing reads this file**; see below |
+| `cfg\common.cfg` | `authURL` patched. `connectString`, `uname`, `pwd` **not** patched — see below |
+| `CARE_StoreSCP_Service.exe.config` | Nothing to patch; it holds only `eventlog` |
+
+**`CARE_DICOM_Enabler.exe.config` is dead configuration.** The WinForms UI
+reads everything through `cls_PlexusConfig.ReadDetailsFromXML` against
+`cfg\common.cfg` — `frm_LoginScreen.cs:49` and `frm_Mainform.cs:265` are
+typical. No code reads `connectionstring`, `worklistURL`, `uploadURL` or
+`jwtToken` from it. The build rewrites the URL and token keys purely so the
+archive does not carry the staging address in a file that looks live; the
+remaining stale keys are harmless but misleading, and are worth deleting from
+the root `App.config` outright.
+
+**`cfg\common.cfg` credentials cannot be patched by the build.**
+`connectString`, `uname` and `pwd` are AES-encrypted, and the workflow holds
+no plaintext to re-encrypt — deliberately, since that would mean putting the
+database password into GitHub. Its `authURL` is plaintext and is rewritten,
+because `CARE_Auth_Service` authenticates the application user against it
+(`PlexusAuthService.cs:234`, called at `:139`) and a failure there stops the
+DICOM services. Regenerate the encrypted values locally per §4.3.
+
 ### Repointing an install you have already extracted
 
 These are plain XML files sitting beside the executables, so there is no need
