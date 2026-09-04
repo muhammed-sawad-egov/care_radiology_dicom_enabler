@@ -109,7 +109,13 @@ namespace Worklist_SCP
                     //var pellucidWorklistItems = CreateItemsSourceService.GetAllCurrentWorklistItemsFromPellucidAsync();
                     var pellucidWorklistItems = CreateItemsSourceService.GetAllCurrentWorklistItemsFromCareAsync();
                     WorklistServer.CurrentWorklistItems = pellucidWorklistItems;
-                    fileLogger.Information($" Successfully fetched {pellucidWorklistItems?.Count ?? 0} worklist items from CARE Server");
+                    // Reporting a failed fetch as "Successfully fetched 0 worklist items" sent
+                    // operators looking for missing service requests in CARE when the real
+                    // cause was a rejected API key. WorklistItems*.txt has the detail.
+                    if (WorklistItemsProvider.LastCareFetchFailed)
+                        fileLogger.Warning(" FAILED to fetch worklist items from CARE Server - returning an empty worklist. See WorklistItems*.txt for the cause.");
+                    else
+                        fileLogger.Information($" Successfully fetched {pellucidWorklistItems?.Count ?? 0} worklist items from CARE Server");
                     break;
 
             }

@@ -24,8 +24,16 @@ namespace Worklist_SCP.Model
 {
     public class WorklistItemsProvider : IWorklistItemsSource
     {
+        /// <summary>
+        /// True when the last CARE worklist fetch failed rather than returning no rows.
+        /// GetAllCurrentWorklistItemsFromCareAsync yields an empty list in both cases and
+        /// the callers log only the count, which made a rejected API key look identical to
+        /// an empty worklist in ModalitySCP.txt. Static because
+        /// WorklistServer.CreateItemsSourceService hands out a fresh provider per call.
+        /// </summary>
+        public static bool LastCareFetchFailed { get; private set; }
 
-        
+
         /// <summary>
         /// This method returns some hard coded worklist items - of course they should be loaded from database or some other service
         /// </summary>
@@ -185,6 +193,7 @@ namespace Worklist_SCP.Model
         {
             List<WorklistItem> objWorkListItems = new List<WorklistItem>();
             ucls_ReadWriteLog objReadWriteLog = new ucls_ReadWriteLog();
+            LastCareFetchFailed = false;
 
             try
             {
@@ -302,6 +311,7 @@ namespace Worklist_SCP.Model
             }
             catch (Exception ex)
             {
+                LastCareFetchFailed = true;
                 objReadWriteLog.WriteToLog("Error Getting / Populating CARE worklist data with exception " + ex.Message, false);
             }
 
@@ -339,6 +349,23 @@ namespace Worklist_SCP.Model
                     client.DefaultRequestHeaders.Add("Authorization", token);
 
                     HttpResponseMessage response = await client.GetAsync(requestUrl);
+
+                    // The plugin compares the Authorization header against
+                    // CARE_RADIOLOGY_WEBHOOK_SECRET by exact string equality and answers
+                    // 403 on any mismatch. EnsureSuccessStatusCode alone reports only
+                    // "403 (Forbidden)", which reads like a permissions problem on the
+                    // server rather than a one-character typo in careToken, so name the
+                    // two values that have to match before rethrowing.
+                    int statusCode = (int)response.StatusCode;
+                    if (statusCode == 401 || statusCode == 403)
+                    {
+                        objReadWriteLog.WriteToLog(
+                            "CARE Worklist API rejected the API key (HTTP " + statusCode + "). The 'careToken' " +
+                            "setting in CARE_MWL_Service.exe.config must exactly match " +
+                            "CARE_RADIOLOGY_WEBHOOK_SECRET in the CARE server's plug_config.py. " +
+                            "careToken is currently " + token.Length + " characters.", false);
+                    }
+
                     response.EnsureSuccessStatusCode();
                     responseBody = await response.Content.ReadAsStringAsync();
                 }

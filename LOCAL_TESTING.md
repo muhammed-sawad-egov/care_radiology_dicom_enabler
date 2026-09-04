@@ -104,6 +104,24 @@ So if your CARE instance expects `Authorization: Bearer abc123`, the secret
 must contain `Bearer abc123`, not `abc123`. Storing the bare token is the
 most common cause of a `403 Forbidden` in `logs\WorklistItems*.txt`.
 
+**The plugin compares the header by exact string equality**
+(`dicom.py`, `StaticAPIKeyAuthentication`), so a single wrong character yields
+`403`, never a partial match. Note that the value shipped in every committed
+`App.config`, in `docker-compose.radiology.yaml` and in the plugin README is
+spelled **`RADOMSECRET`** — missing the first `N`. Setting the secret to the
+correctly-spelled `RANDOMSECRET` is a mismatch and produces a permanently
+empty worklist. Copy the value from the server's `plug_config.py` rather than
+typing it.
+
+Since the build now probes the endpoint with the resolved token, a mismatch
+fails the build instead of shipping. That probe can only warn when the runner
+cannot reach `CARE_BASE_URL` (a hospital LAN address), so for those targets
+still compare the fingerprint the build prints against the server's:
+
+```bash
+echo -n "$CARE_RADIOLOGY_WEBHOOK_SECRET" | sha256sum
+```
+
 **`CARE_BASE_URL` must not end in a slash.** It is string-concatenated at
 `WorklistItemsProvider.cs:322`, so a trailing slash produces a double slash
 in the request path.
@@ -371,7 +389,8 @@ Look for `Successfully fetched N worklist items`.
 
 | Symptom | Cause |
 |---|---|
-| `403 Forbidden` in `WorklistItems*.txt` | `careToken` wrong, or lacks radiology permissions |
+| `403 Forbidden` in `WorklistItems*.txt` | `careToken` does not match the server's `CARE_RADIOLOGY_WEBHOOK_SECRET` |
+| `FAILED to fetch worklist items` in `ModalitySCP.txt` | Same as above — the cause is logged in `WorklistItems*.txt` |
 | `Successfully fetched 0 worklist items` | Token is valid; no entries match your modality filter or `careFromDate` |
 | Service starts then stops immediately | `cfg\common.cfg` connection string cannot reach MySQL |
 | Port 2007/2008 not listening | Service failed to start, or another process holds the port |

@@ -215,6 +215,79 @@ jobs:
           Write-Output ""
           Write-Output "All CARE settings baked in - every service now targets the same server."
 
+          # A wrong token is invisible until a modality issues a C-FIND and the
+          # worklist comes back empty, because the .NET client swallows the HTTP
+          # error. Print a fingerprint so the operator can compare it against the
+          # server's CARE_RADIOLOGY_WEBHOOK_SECRET without either side echoing the
+          # secret:  echo -n "$SECRET" | sha256sum
+          if ($apiToken) {
+            $sha = [System.Security.Cryptography.SHA256]::Create()
+            $hash = [BitConverter]::ToString(
+              $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($apiToken))
+            ).Replace('-', '').ToLower()
+            Write-Output "Token fingerprint (sha256, first 16): $($hash.Substring(0, 16))"
+          }
+
+      # A token that does not authenticate produces no build error and no runtime
+      # error - just a permanently empty worklist - so reject it here instead.
+      # Builds targeting a server the runner cannot reach (a hospital LAN address)
+      # only warn: unreachable is not the same as unauthorized.
+      - name: Verify CARE API token authenticates against the server
+        if: env.CARE_BASE_URL != '' && env.CARE_API_TOKEN != ''
+        shell: pwsh
+        run: |
+          $serverUrl = "$env:CARE_BASE_URL".TrimEnd('/')
+          $apiToken  = "$env:CARE_API_TOKEN"
+
+          # Authentication runs before any filtering, so the cheapest possible
+          # query proves the token: an empty [now, now] window matches no service
+          # request, leaving only the status code to inspect. from/to are the
+          # endpoint's own filter parameters and have no bearing on what gets
+          # baked into the build - careFromDate above is what ships.
+          $instant  = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+          $window   = [Uri]::EscapeDataString($instant)
+          $probeUrl = "$serverUrl/api/care_radiology/dicom/worklist/?modality=&from=$window&to=$window"
+
+          Write-Output "Probing $serverUrl/api/care_radiology/dicom/worklist/ ..."
+
+          try {
+            # SkipHeaderValidation: the plugin expects the raw secret as the whole
+            # Authorization value, which .NET's header parser rejects if it contains
+            # characters no auth scheme would. Send it as-is and judge by status code.
+            $response = Invoke-WebRequest -Uri $probeUrl -Method Get -TimeoutSec 20 `
+                          -Headers @{ Authorization = $apiToken } `
+                          -SkipHttpErrorCheck -SkipHeaderValidation
+          } catch {
+            Write-Warning "Could not reach $serverUrl ($($_.Exception.Message))."
+            Write-Warning "Token NOT verified. If this server is on a private network this is expected;"
+            Write-Warning "otherwise check CARE_BASE_URL."
+            exit 0
+          }
+
+          $code = [int]$response.StatusCode
+
+          if ($code -eq 401 -or $code -eq 403) {
+            Write-Output "::error::CARE API token rejected by $serverUrl (HTTP $code)."
+            Write-Output "::error::The token baked into this build does not match the server's"
+            Write-Output "::error::PLUGIN_CONFIGS['care_radiology']['CARE_RADIOLOGY_WEBHOOK_SECRET']."
+            Write-Output "::error::Fix the CARE_API_TOKEN repository secret (or the care_api_token input)"
+            Write-Output "::error::and re-run. Compare the fingerprint above with the server's:"
+            Write-Output "::error::  echo -n `"`$CARE_RADIOLOGY_WEBHOOK_SECRET`" | sha256sum"
+            exit 1
+          }
+
+          if ($code -eq 404) {
+            Write-Warning "HTTP 404 - the radiology plugin may not be installed on $serverUrl. Token NOT verified."
+            exit 0
+          }
+
+          if ($code -ne 200) {
+            Write-Warning "Unexpected HTTP $code from the worklist endpoint. Token NOT verified."
+            exit 0
+          }
+
+          Write-Output "Token accepted (HTTP 200)."
+
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
