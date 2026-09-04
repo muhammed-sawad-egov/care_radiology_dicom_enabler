@@ -23,9 +23,9 @@ namespace Worklist_SCP.Model
         // Must match CARE's VALID_MPPS_STATUSES, and more importantly the TagConfig.display values
         // the webhook looks the status up by - an unrecognised string is answered with
         // 400 "Tag configuration not found for status: ...", not a validation error.
-        private const string ScanStartedStatus = "SCAN_STARTED";
-        private const string ScanCompletedStatus = "SCAN_COMPLETED";
-        private const string ScanDiscontinuedStatus = "DISCONTINUED";
+        private const string ScanStartedStatus = "Scan Started";
+        private const string ScanCompletedStatus = "Scan Completed";
+        private const string ScanDiscontinuedStatus = "Scan Cancelled";
 
         public static Dictionary<string, WorklistItem> PendingProcedures { get; } = new Dictionary<string, WorklistItem>();
 
