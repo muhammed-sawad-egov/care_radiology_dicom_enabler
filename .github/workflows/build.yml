@@ -205,16 +205,18 @@ jobs:
           New-Item -ItemType Directory -Force -Path "$binPath\logs"
           Write-Output "Configuration files and directories created in $binPath"
 
-      - name: Set short SHA and artifact suffix
+      - name: Set short SHA and artifact name
         shell: pwsh
         run: |
-          echo "SHORT_SHA=$($env:GITHUB_SHA.Substring(0,7))" >> $env:GITHUB_ENV
+          $shortSha = $env:GITHUB_SHA.Substring(0,7)
+          echo "SHORT_SHA=$shortSha" >> $env:GITHUB_ENV
 
           # Add suffix if CARE settings are customized
           $serverUrl = "${{ inputs.care_server_url }}"
           $modality  = "${{ inputs.care_modality }}"
           $backend   = "${{ inputs.care_backend }}"
 
+          $suffix = ""
           if ($serverUrl -ne '' -or $modality -ne '' -or $backend -ne '') {
             $suffix = "-custom"
             if ($modality -ne '') {
@@ -227,15 +229,28 @@ jobs:
             } elseif ($backend -eq '0') {
               $suffix += "-List"
             }
-            echo "ARTIFACT_SUFFIX=$suffix" >> $env:GITHUB_ENV
-          } else {
-            echo "ARTIFACT_SUFFIX=" >> $env:GITHUB_ENV
           }
+          echo "ARTIFACT_SUFFIX=$suffix" >> $env:GITHUB_ENV
+
+          # Build the artifact name here rather than inline in the upload step: upload-artifact
+          # rejects names containing " : < > | * ? \ / CR LF, and a branch such as
+          # "enhanc/facility_id" reaches us through github.ref_name with a slash in it.
+          $config   = "${{ inputs.build_configuration || 'Release' }}"
+          $platform = "${{ inputs.build_platform || 'AnyCPU' }}"
+          $refLabel = "${{ github.event.pull_request.number || github.ref_name }}"
+
+          $artifactName = "CARE_DICOM_Enabler-$config-$platform$suffix-$refLabel-$($env:GITHUB_RUN_NUMBER)-$shortSha"
+          $artifactName = $artifactName -replace '[\\/:"<>|*?\r\n]', '-'   # invalid chars -> dash
+          $artifactName = $artifactName -replace '\s+', ''                 # "Any CPU" -> "AnyCPU"
+          $artifactName = $artifactName -replace '-{2,}', '-'              # collapse runs of dashes
+
+          Write-Output "Artifact name: $artifactName"
+          echo "ARTIFACT_NAME=$artifactName" >> $env:GITHUB_ENV
 
       - name: Upload Build Artifact
         if: ${{ inputs.upload_artifact != 'false' }}
         uses: actions/upload-artifact@v4
         with:
-          name: CARE_DICOM_Enabler-${{ inputs.build_configuration || 'Release' }}-${{ inputs.build_platform || 'AnyCPU' }}${{ env.ARTIFACT_SUFFIX }}-${{ github.event.pull_request.number || github.ref_name }}-${{ github.run_number }}-${{ env.SHORT_SHA }}
+          name: ${{ env.ARTIFACT_NAME }}
           path: bin\${{ inputs.build_configuration || 'Release' }}\
           if-no-files-found: error
