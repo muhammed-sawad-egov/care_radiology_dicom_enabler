@@ -103,11 +103,12 @@ namespace Plexus.Common.Database
         /// <param name="aetitle"></param>
         /// <param name="hostaddress"></param>
         /// <param name="port"></param>
+        /// <param name="facilityId"></param>
         /// <param name="description"></param>
         /// <param name="updateServer"></param>
         /// <param name="errorString"></param>
         /// <returns></returns>
-        public bool insertorUpdateServer(string serverName,string aetitle,string hostaddress,string port,string description,string primarykey,bool updateServer , ref string errorString)
+        public bool insertorUpdateServer(string serverName,string aetitle,string hostaddress,string port,string facilityId,string description,string primarykey,bool updateServer , ref string errorString)
         {
             try
             {
@@ -116,12 +117,12 @@ namespace Plexus.Common.Database
                 {
                     if (!updateServer)
                     {
-                        query = "INSERT INTO dcm_servers(name,aetitle,hostaddress,portnumber,description) " +
-                            "VALUES ('" + serverName + "','" + aetitle + "','" + hostaddress + "','" + port + "','" + description + "')";
+                        query = "INSERT INTO dcm_servers(name,aetitle,hostaddress,portnumber,facilityid,description) " +
+                            "VALUES ('" + serverName + "','" + aetitle + "','" + hostaddress + "','" + port + "','" + facilityId + "','" + description + "')";
                     }
                     else
                     {
-                        query = "UPDATE dcm_servers SET name='"+serverName+ "',aetitle='" + aetitle + "',hostaddress='" + hostaddress + "',portnumber='" + port + "'," +
+                        query = "UPDATE dcm_servers SET name='"+serverName+ "',aetitle='" + aetitle + "',hostaddress='" + hostaddress + "',portnumber='" + port + "',facilityid='" + facilityId + "'," +
                             "description='" + description + "' WHERE pk="+ primarykey + "" ;
                     }
                     MySqlCommand command = new MySqlCommand(query, conConnection);
@@ -211,7 +212,7 @@ namespace Plexus.Common.Database
             {
                 if (openDBConnection(ref errorString))
                 {
-                    string query = "SELECT pk,name,aetitle,hostaddress,portnumber,description FROM dcm_servers";
+                    string query = "SELECT pk,name,aetitle,hostaddress,portnumber,facilityid,description FROM dcm_servers";
                     dsResult = new DataSet();
                     adpAdapter = new MySqlDataAdapter(query, conConnection);
                     adpAdapter.Fill(dsResult);
@@ -413,6 +414,39 @@ namespace Plexus.Common.Database
                 bRetVal = false;
             }
             return bRetVal;
+        }
+
+
+        /// <summary>
+        /// Get the Facility ID configured against a server entry in the Server List. The CARE worklist
+        /// API is filtered by this value, so the modality that queries us decides which facility's
+        /// worklist is returned. Returns an empty string when the server is unknown or has no Facility ID.
+        /// </summary>
+        public string GetFacilityIdByAETitle(string callingAET, string hostAddress, ref string errorString)
+        {
+            string facilityId = string.Empty;
+            try
+            {
+                if (openDBConnection(ref errorString))
+                {
+                    string selectQuery = $"SELECT facilityid FROM dcm_servers WHERE aetitle='{callingAET}' and hostaddress='{hostAddress}' LIMIT 1";
+                    using (MySqlCommand cmd = new MySqlCommand(selectQuery, conConnection))
+                    {
+                        var result = cmd.ExecuteScalar();
+                        if (result != null && result != DBNull.Value)
+                        {
+                            facilityId = result.ToString();
+                        }
+                    }
+                }
+                closeDBConnection(ref errorString);
+            }
+            catch (Exception ex)
+            {
+                errorString = $"Getting Facility ID for AETitle {callingAET} failed with expection" + ex.Message;
+                facilityId = string.Empty;
+            }
+            return facilityId;
         }
 
 

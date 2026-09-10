@@ -181,7 +181,7 @@ namespace Worklist_SCP.Model
             return objWorkListItems;
         }
 
-        public List<WorklistItem> GetAllCurrentWorklistItemsFromCareAsync()
+        public List<WorklistItem> GetAllCurrentWorklistItemsFromCareAsync(string facilityId = null)
         {
             List<WorklistItem> objWorkListItems = new List<WorklistItem>();
             ucls_ReadWriteLog objReadWriteLog = new ucls_ReadWriteLog();
@@ -190,7 +190,7 @@ namespace Worklist_SCP.Model
             {
                 string errorString = string.Empty;
 
-                Task<string> task = GetCareWorklistDetailsAsync();
+                Task<string> task = GetCareWorklistDetailsAsync(facilityId);
                 string responseBody = task.Result;
 
                 CareWorklistResponse careResponse = JsonConvert.DeserializeObject<CareWorklistResponse>(responseBody);
@@ -303,10 +303,13 @@ namespace Worklist_SCP.Model
 
 
         /// <summary>
-        /// 
+        /// Calls the CARE worklist API. When a Facility ID is configured against the querying server in
+        /// the Server List, it is sent as the facility_id query param so CARE returns only that
+        /// facility's worklist; when it is blank the param is omitted altogether.
         /// </summary>
+        /// <param name="facilityId">Facility ID to filter on, or null/empty for no facility filter.</param>
         /// <returns></returns>
-        private async Task<string> GetCareWorklistDetailsAsync()
+        private async Task<string> GetCareWorklistDetailsAsync(string facilityId = null)
         {
             string responseBody = string.Empty;
             ucls_ReadWriteLog objReadWriteLog = new ucls_ReadWriteLog();
@@ -323,6 +326,15 @@ namespace Worklist_SCP.Model
                                     "/api/care_radiology/dicom/worklist/?modality=" + Uri.EscapeDataString(modality) +
                                     "&from=" + Uri.EscapeDataString(fromDate) +
                                     "&to=" + Uri.EscapeDataString(toDate);
+
+                if (!string.IsNullOrWhiteSpace(facilityId))
+                {
+                    requestUrl += "&facility_id=" + Uri.EscapeDataString(facilityId.Trim());
+                }
+                else
+                {
+                    objReadWriteLog.WriteToLog("No Facility ID configured for this server - querying CARE worklist without a facility filter", true);
+                }
 
                 objReadWriteLog.WriteToLog("CARE Worklist URL: " + requestUrl, true);
 

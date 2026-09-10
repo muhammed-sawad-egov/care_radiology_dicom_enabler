@@ -18,7 +18,11 @@ namespace Worklist_SCP.Model
 
         List<WorklistItem> GetAllCurrentWorklistItemsFromPellucidAsync();
 
-        List<WorklistItem> GetAllCurrentWorklistItemsFromCareAsync();
+        /// <summary>
+        /// Fetches the worklist from the CARE server, optionally restricted to a single facility.
+        /// Pass null/empty to query every facility the credentials can see.
+        /// </summary>
+        List<WorklistItem> GetAllCurrentWorklistItemsFromCareAsync(string facilityId = null);
 
     }
 }

@@ -106,8 +106,9 @@ namespace Worklist_SCP
                     break;
                 case 2:
                     fileLogger.Information($"Fetching Records from CARE Server API");
+                    string facilityId = getFacilityId(Association.CallingAE, Association.RemoteHost);
                     //var pellucidWorklistItems = CreateItemsSourceService.GetAllCurrentWorklistItemsFromPellucidAsync();
-                    var pellucidWorklistItems = CreateItemsSourceService.GetAllCurrentWorklistItemsFromCareAsync();
+                    var pellucidWorklistItems = CreateItemsSourceService.GetAllCurrentWorklistItemsFromCareAsync(facilityId);
                     WorklistServer.CurrentWorklistItems = pellucidWorklistItems;
                     fileLogger.Information($" Successfully fetched {pellucidWorklistItems?.Count ?? 0} worklist items from CARE Server");
                     break;
@@ -160,7 +161,43 @@ namespace Worklist_SCP
         }
 
         /// <summary>
-        /// 
+        /// Reads the Facility ID configured against the querying modality in the Server List, so the
+        /// CARE worklist request can be filtered to that facility. Facility ID is optional - an empty
+        /// value (or an unknown/unreachable server list) means the worklist is fetched unfiltered.
+        /// </summary>
+        private string getFacilityId(string aeTitle, string hostAddress)
+        {
+            string errorString = string.Empty;
+            string applicationPath = Path.GetDirectoryName(Assembly.GetEntryAssembly().Location);
+            try
+            {
+                if (objDal == null)
+                {
+                    objDal = new ucls_DAL(applicationPath);
+                }
+                string facilityId = objDal.GetFacilityIdByAETitle(aeTitle, hostAddress, ref errorString);
+                if (errorString != string.Empty)
+                {
+                    fileLogger?.Error($"[FACILITY] Lookup failed for AE={aeTitle} IP={hostAddress}: {errorString}");
+                    return string.Empty;
+                }
+                if (string.IsNullOrWhiteSpace(facilityId))
+                {
+                    fileLogger?.Information($"[FACILITY] No Facility ID configured for AE={aeTitle} IP={hostAddress}");
+                    return string.Empty;
+                }
+                fileLogger?.Information($"[FACILITY] AE={aeTitle} IP={hostAddress} resolved to Facility ID={facilityId}");
+                return facilityId;
+            }
+            catch (Exception ex)
+            {
+                fileLogger?.Error($"[FACILITY] Lookup failed for AE={aeTitle} with exception {ex.Message}");
+                return string.Empty;
+            }
+        }
+
+        /// <summary>
+        ///
         /// </summary>
         /// <param name="accessionNos"></param>
         private void UpdateStatusinDB(List<string> accessionNos)
