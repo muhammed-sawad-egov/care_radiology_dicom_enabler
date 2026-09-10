@@ -309,7 +309,7 @@ namespace Worklist_SCP.Model
 
 
         /// <summary>
-        /// Calls the CARE worklist API, always scoped to one facility via the facility_id query param.
+        /// Calls the CARE worklist API, always scoped to one facility via the facility query param.
         /// Callers reach this only after GetAllCurrentWorklistItemsFromCareAsync has established that a
         /// Facility ID is present.
         /// </summary>
@@ -333,7 +333,7 @@ namespace Worklist_SCP.Model
                                     "&from=" + Uri.EscapeDataString(fromDate) +
                                     "&to=" + Uri.EscapeDataString(toDate);
 
-                requestUrl += "&facility_id=" + Uri.EscapeDataString(facilityId.Trim());
+                requestUrl += "&facility=" + Uri.EscapeDataString(facilityId.Trim());
 
                 objReadWriteLog.WriteToLog("CARE Worklist URL: " + requestUrl, true);
 
