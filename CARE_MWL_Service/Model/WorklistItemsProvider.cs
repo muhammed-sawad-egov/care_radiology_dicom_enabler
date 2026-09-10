@@ -344,8 +344,30 @@ namespace Worklist_SCP.Model
                     client.DefaultRequestHeaders.Add("Authorization", token);
 
                     HttpResponseMessage response = await client.GetAsync(requestUrl);
-                    response.EnsureSuccessStatusCode();
+
+                    // Read the body BEFORE throwing. EnsureSuccessStatusCode discards it, which
+                    // made a rejected token, a moved route and a permissions failure all surface
+                    // as a bare "403 (Forbidden)" - the server's own explanation was thrown away.
                     responseBody = await response.Content.ReadAsStringAsync();
+
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        objReadWriteLog.WriteToLog(
+                            $"CARE Worklist API returned {(int)response.StatusCode} ({response.ReasonPhrase}). Response body: {Truncate(responseBody, 1000)}", false);
+
+                        // A 401/403 is nearly always the careToken not matching the server's
+                        // CARE_RADIOLOGY_WEBHOOK_SECRET. Log a fingerprint of the token in use so
+                        // it can be compared against the server without either side echoing it:
+                        //   echo -n "$SECRET" | sha256sum
+                        if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized ||
+                            response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+                        {
+                            objReadWriteLog.WriteToLog(
+                                $"Authorization rejected by CARE. careToken in use: {DescribeToken(token)}. Verify it matches CARE_RADIOLOGY_WEBHOOK_SECRET on the server.", false);
+                        }
+
+                        response.EnsureSuccessStatusCode();
+                    }
                 }
 
                 objReadWriteLog.WriteToLog("CARE Worklist API call successful. Returning the value", true);
@@ -461,6 +483,33 @@ namespace Worklist_SCP.Model
 
 
 
+
+        /// <summary>
+        /// Caps a logged response body so an HTML error page cannot flood the log file, which
+        /// rolls at 5 KB per part.
+        /// </summary>
+        private static string Truncate(string value, int maxLength)
+        {
+            if (string.IsNullOrEmpty(value)) return "(empty)";
+            value = value.Trim();
+            return value.Length <= maxLength ? value : value.Substring(0, maxLength) + "... (truncated)";
+        }
+
+        /// <summary>
+        /// Describes the configured token without writing it to the log: its length plus a short
+        /// SHA-256 fingerprint, which is enough to compare against the server's own secret.
+        /// </summary>
+        private static string DescribeToken(string token)
+        {
+            if (string.IsNullOrEmpty(token)) return "(not configured)";
+
+            using (var sha = System.Security.Cryptography.SHA256.Create())
+            {
+                byte[] hash = sha.ComputeHash(Encoding.UTF8.GetBytes(token));
+                string hex = BitConverter.ToString(hash).Replace("-", string.Empty).ToLowerInvariant();
+                return $"{token.Length} chars, sha256:{hex.Substring(0, 16)}";
+            }
+        }
 
         private static string NormalizeSex(string value)
         {
