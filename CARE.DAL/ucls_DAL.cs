@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 
 using System.Data;
 using System.IO;
@@ -418,24 +418,61 @@ namespace Plexus.Common.Database
 
 
         /// <summary>
-        /// Get the Facility ID configured against a server entry in the Server List. The CARE worklist
-        /// API is filtered by this value, so the modality that queries us decides which facility's
-        /// worklist is returned. Returns an empty string when the server is unknown or has no Facility ID.
+        /// Get the Facility ID to filter the CARE worklist by, from the Facility ID column of the
+        /// Server List.
         /// </summary>
-        public string GetFacilityIdByAETitle(string callingAET, string hostAddress, ref string errorString)
+        /// <param name="resolvedFrom">Set to a human-readable description of how the value was found,
+        /// for logging - or why it could not be.</param>
+        public string GetFacilityId(string callingAET, ref string resolvedFrom, ref string errorString)
         {
             string facilityId = string.Empty;
+            resolvedFrom = "not resolved";
             try
             {
                 if (openDBConnection(ref errorString))
                 {
-                    string selectQuery = $"SELECT facilityid FROM dcm_servers WHERE aetitle='{callingAET}' and hostaddress='{hostAddress}' LIMIT 1";
-                    using (MySqlCommand cmd = new MySqlCommand(selectQuery, conConnection))
+                    // 1. Exact match on the querying modality's AE title.
+                    using (MySqlCommand cmd = new MySqlCommand(
+                        "SELECT facilityid FROM dcm_servers WHERE aetitle = @aetitle AND facilityid IS NOT NULL AND facilityid <> '' LIMIT 1",
+                        conConnection))
                     {
+                        cmd.Parameters.AddWithValue("@aetitle", callingAET ?? string.Empty);
                         var result = cmd.ExecuteScalar();
                         if (result != null && result != DBNull.Value)
                         {
                             facilityId = result.ToString();
+                            resolvedFrom = $"Server List row for AE {callingAET}";
+                        }
+                    }
+
+                    // 2. No row for this AE - fall back to the only Facility ID configured, if there
+                    //    is exactly one.
+                    if (string.IsNullOrWhiteSpace(facilityId))
+                    {
+                        var distinctIds = new System.Collections.Generic.List<string>();
+                        using (MySqlCommand cmd = new MySqlCommand(
+                            "SELECT DISTINCT facilityid FROM dcm_servers WHERE facilityid IS NOT NULL AND facilityid <> ''",
+                            conConnection))
+                        using (MySqlDataReader reader = cmd.ExecuteReader())
+                        {
+                            while (reader.Read())
+                            {
+                                distinctIds.Add(reader.GetString(0));
+                            }
+                        }
+
+                        if (distinctIds.Count == 1)
+                        {
+                            facilityId = distinctIds[0];
+                            resolvedFrom = "the only Facility ID in the Server List";
+                        }
+                        else if (distinctIds.Count > 1)
+                        {
+                            resolvedFrom = $"ambiguous - {distinctIds.Count} different Facility IDs in the Server List and no row matches AE {callingAET}; add a row for this AE title to disambiguate";
+                        }
+                        else
+                        {
+                            resolvedFrom = "no Facility ID entered in the Server List";
                         }
                     }
                 }

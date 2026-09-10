@@ -310,7 +310,8 @@ namespace Plexus_DICOM_Enabler
         {
             string errorString = string.Empty;
             if ( txt_ServerName.Text == string.Empty || txt_AETitle.Text == string.Empty ||
-                txt_HostAddress.Text == string.Empty || txt_PortNo.Text == string.Empty )
+                txt_HostAddress.Text == string.Empty || txt_PortNo.Text == string.Empty ||
+                txt_FacilityId.Text.Trim() == string.Empty )
             {
                 MessageBox.Show(this, "Please fill mandatory fields. All Fields are mandatory except description",
                                      "Check Mandatory", MessageBoxButtons.OK,

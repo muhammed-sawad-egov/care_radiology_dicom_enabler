@@ -669,7 +669,7 @@ namespace Plexus_DICOM_Enabler
             // 
             this.label6.AutoSize = true;
             this.label6.Font = new System.Drawing.Font("Microsoft Sans Serif", 7.8F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.label6.Location = new System.Drawing.Point(129, 175);
+            this.label6.Location = new System.Drawing.Point(345, 118);
             this.label6.Name = "label6";
             this.label6.Size = new System.Drawing.Size(98, 16);
             this.label6.TabIndex = 14;
@@ -727,10 +727,10 @@ namespace Plexus_DICOM_Enabler
             // 
             // rtb_Description
             // 
-            this.rtb_Description.Location = new System.Drawing.Point(129, 194);
+            this.rtb_Description.Location = new System.Drawing.Point(345, 140);
             this.rtb_Description.Margin = new System.Windows.Forms.Padding(3, 2, 3, 2);
             this.rtb_Description.Name = "rtb_Description";
-            this.rtb_Description.Size = new System.Drawing.Size(465, 75);
+            this.rtb_Description.Size = new System.Drawing.Size(599, 75);
             this.rtb_Description.TabIndex = 9;
             this.rtb_Description.Text = "";
             //
@@ -792,7 +792,7 @@ namespace Plexus_DICOM_Enabler
             this.mtbtn_AddUpdateServer.Depth = 0;
             this.mtbtn_AddUpdateServer.HighEmphasis = true;
             this.mtbtn_AddUpdateServer.Icon = null;
-            this.mtbtn_AddUpdateServer.Location = new System.Drawing.Point(836, 233);
+            this.mtbtn_AddUpdateServer.Location = new System.Drawing.Point(836, 228);
             this.mtbtn_AddUpdateServer.Margin = new System.Windows.Forms.Padding(4, 6, 4, 6);
             this.mtbtn_AddUpdateServer.MouseState = MaterialSkin.MouseState.HOVER;
             this.mtbtn_AddUpdateServer.Name = "mtbtn_AddUpdateServer";
