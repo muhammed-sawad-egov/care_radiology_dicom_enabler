@@ -1,4 +1,4 @@
-﻿// Copyright (c) 2012-2022 fo-dicom contributors.
+// Copyright (c) 2012-2022 fo-dicom contributors.
 // Licensed under the Microsoft Public License (MS-PL).
 
 using System;
@@ -16,10 +16,11 @@ using System.IO;
 using System.Reflection;
 using Plexus.Common.Database;
 using Plexus.Common.config;
+using Plexus_MWL_Service.logs;
 
 namespace Worklist_SCP
 {
-    public class WorklistService : DicomService, IDicomServiceProvider, IDicomCFindProvider ,IDicomCEchoProvider , IDicomNServiceProvider
+    public class WorklistService : DicomService, IDicomServiceProvider, IDicomCFindProvider ,IDicomCEchoProvider , IDicomNServiceProvider, IDicomCStoreProvider
     {
         public static IWorklistItemsSource CreateItemsSourceService => new WorklistItemsProvider();
         public static Serilog.ILogger fileLogger = null;
@@ -39,7 +40,7 @@ namespace Worklist_SCP
             {
                 if (_mppsSource == null)
                 {
-                    _mppsSource = new MppsHandler(Logger);
+                    _mppsSource = new MppsHandler(Logger, fileLogger);
                 }
 
                 return _mppsSource;
@@ -55,25 +56,15 @@ namespace Worklist_SCP
 
         private Serilog.ILogger GetFileLogger()
         {
-            string logFilePath = Path.Combine(Path.GetDirectoryName(Assembly.GetEntryAssembly().Location), "logs/ModalitySCP.txt");
-            return new LoggerConfiguration().
-                WriteTo.File(logFilePath,
-                restrictedToMinimumLevel: Serilog.Events.LogEventLevel.Information,
-                shared: true,
-                retainedFileCountLimit: 3,
-                rollOnFileSizeLimit: true,
-                fileSizeLimitBytes: 5120)
+            return new LoggerConfiguration()
+                .WriteTo.Sink(DailyFolderSink.For("ModalitySCP.txt"), Serilog.Events.LogEventLevel.Information)
                 .CreateLogger();
         }
 
         public Task<DicomCEchoResponse> OnCEchoRequestAsync(DicomCEchoRequest request)
         {
+            // The calling AE was checked against the Server List when the association was accepted.
             fileLogger?.Information($"[C-ECHO] Request from AE={Association.CallingAE} IP={Association.RemoteHost}");
-            if (!validateServer(Association.CallingAE, Association.RemoteHost))
-            {
-                fileLogger?.Warning($"[C-ECHO] Rejected AE={Association.CallingAE}");
-                return Task.FromResult(new DicomCEchoResponse(request, DicomStatus.ProcessingFailure));
-            }
             return Task.FromResult(new DicomCEchoResponse(request, DicomStatus.Success));
         }
 
@@ -81,14 +72,10 @@ namespace Worklist_SCP
         public async IAsyncEnumerable<DicomCFindResponse> OnCFindRequestAsync(DicomCFindRequest request)
         {
 
+            // The calling AE was checked against the Server List when the association was accepted.
             fileLogger.Information($"Received C-FIND request from AE {Association.CallingAE} with IP: {Association.RemoteHost}");
-            string errorString = string.Empty;
-            fileLogger.Information($"CFIND : Validating Server with AETitle {Association.CallingAE} with IP: {Association.RemoteHost}");
-            if (!validateServer(Association.CallingAE, Association.RemoteHost))
-            {
-                yield return new DicomCFindResponse(request, DicomStatus.QueryRetrieveUnableToProcess);
-            }
             List<string> accessionNos = new List<string>();
+            List<DicomDataset> results = null;
 
             switch (Convert.ToInt32(ConfigurationManager.AppSettings["backend"] ?? "2"))
             {
@@ -105,18 +92,42 @@ namespace Worklist_SCP
                     fileLogger.Information($" Successfully fetched {dbWorklistItems?.Count ?? 0} worklist items from Plexus Database");
                     break;
                 case 2:
-                    fileLogger.Information($"Fetching Records from CARE Server API");
                     string facilityId = getFacilityId(Association.CallingAE);
-                    //var pellucidWorklistItems = CreateItemsSourceService.GetAllCurrentWorklistItemsFromPellucidAsync();
-                    var pellucidWorklistItems = CreateItemsSourceService.GetAllCurrentWorklistItemsFromCareAsync(facilityId);
-                    WorklistServer.CurrentWorklistItems = pellucidWorklistItems;
-                    fileLogger.Information($" Successfully fetched {pellucidWorklistItems?.Count ?? 0} worklist items from CARE Server");
+                    if (string.IsNullOrWhiteSpace(facilityId))
+                    {
+                        // Facility ID is mandatory: do not call the CARE worklist API without it.
+                        // getFacilityId has already logged why it is missing.
+                        fileLogger.Warning($"Skipping CARE worklist fetch for AE {Association.CallingAE} - no Facility ID set in the Configuration tab; returning no worklist items");
+                        WorklistServer.CurrentWorklistItems = new List<WorklistItem>();
+                        break;
+                    }
+                    // The worklist is served from care_worklist. The CARE API is called only when no
+                    // row there matches this query, then care_worklist is read again.
+                    var itemsSource = CreateItemsSourceService;
+                    fileLogger.Information($"Fetching Records from care_worklist for Facility ID {facilityId}");
+                    var careWorklistItems = itemsSource.GetCareWorklistItemsFromDB(facilityId);
+                    results = WorklistHandler.FilterWorklistItems(request.Dataset, careWorklistItems).ToList();
+                    if (results.Count == 0)
+                    {
+                        fileLogger.Information($"No care_worklist item matches the C-FIND from AE {Association.CallingAE} ({careWorklistItems.Count} scheduled) - refreshing care_worklist from the CARE worklist API");
+                        if (itemsSource.RefreshCareWorklistFromApi(facilityId))
+                        {
+                            careWorklistItems = itemsSource.GetCareWorklistItemsFromDB(facilityId);
+                            results = WorklistHandler.FilterWorklistItems(request.Dataset, careWorklistItems).ToList();
+                        }
+                        else
+                        {
+                            fileLogger.Warning($"Refreshing care_worklist from the CARE worklist API failed - answering from the existing care_worklist rows");
+                        }
+                    }
+                    WorklistServer.CurrentWorklistItems = careWorklistItems;
+                    fileLogger.Information($" Successfully fetched {careWorklistItems.Count} worklist items from care_worklist, {results.Count} matching the C-FIND");
                     break;
 
             }
 
             int returnedItemsCount = 0;
-            foreach (DicomDataset result in WorklistHandler.FilterWorklistItems(request.Dataset, WorklistServer.CurrentWorklistItems))
+            foreach (DicomDataset result in results ?? WorklistHandler.FilterWorklistItems(request.Dataset, WorklistServer.CurrentWorklistItems))
             {
                 // Insert Into Database
                 if (result.GetString(DicomTag.AccessionNumber) != null)
@@ -146,7 +157,7 @@ namespace Worklist_SCP
                 if (!objDal.validateAETitle(aeTitle, hostAddress, ref errorString))
                 {
                     if (errorString == string.Empty)
-                        fileLogger?.Information($"[VALIDATE] AE={aeTitle} IP={hostAddress} not in server list");
+                        fileLogger?.Warning($"[VALIDATE] AE={aeTitle} IP={hostAddress} not in server list");
                     else
                         fileLogger?.Error($"[VALIDATE] AE={aeTitle} validation failed: {errorString}");
                     return false;
@@ -161,11 +172,10 @@ namespace Worklist_SCP
         }
 
         /// <summary>
-        /// Reads the Facility ID from the Server List so the CARE worklist request can be scoped to one
-        /// facility. A row matching the calling AE title wins; failing that, the single Facility ID
-        /// configured in the Server List is used. The Facility ID is mandatory: when none can be
-        /// resolved this returns empty, and the caller then fetches nothing rather than querying every
-        /// facility. The error naming the cause is written to the log.
+        /// Reads the Facility ID from the Configuration tab so the CARE worklist request is scoped to
+        /// this enabler's facility. The Facility ID is mandatory: when none is set this returns empty,
+        /// and the caller then fetches nothing rather than querying every facility. The error naming
+        /// the cause is written to the log.
         /// </summary>
         private string getFacilityId(string aeTitle)
         {
@@ -186,7 +196,7 @@ namespace Worklist_SCP
                 }
                 if (string.IsNullOrWhiteSpace(facilityId))
                 {
-                    fileLogger?.Error($"[FACILITY] No Facility ID for AE={aeTitle} - {resolvedFrom}. The CARE worklist will not be queried; enter a Facility ID in the Server List tab.");
+                    fileLogger?.Error($"[FACILITY] No Facility ID for AE={aeTitle} - {resolvedFrom}. The CARE worklist will not be queried; enter a Facility ID in the Configuration tab.");
                     return string.Empty;
                 }
                 fileLogger?.Information($"[FACILITY] AE={aeTitle} resolved to Facility ID={facilityId} from {resolvedFrom}");
@@ -272,6 +282,14 @@ namespace Worklist_SCP
                 return SendAssociationRejectAsync(DicomRejectResult.Permanent, DicomRejectSource.ServiceUser, DicomRejectReason.CalledAENotRecognized);
             }
 
+            // Checked once here so every service on the association - C-ECHO, C-FIND and the MPPS
+            // N-CREATE / N-SET that update CARE - is limited to modalities in the Server List.
+            if (!validateServer(association.CallingAE, association.RemoteHost))
+            {
+                fileLogger?.Error($"[ASSOC] Rejected: calling AE={association.CallingAE} IP={association.RemoteHost} is not in the Server List");
+                return SendAssociationRejectAsync(DicomRejectResult.Permanent, DicomRejectSource.ServiceUser, DicomRejectReason.CallingAENotRecognized);
+            }
+
             foreach (var pc in association.PresentationContexts)
             {
                 if (pc.AbstractSyntax == DicomUID.Verification
@@ -281,6 +299,16 @@ namespace Worklist_SCP
                 {
                     pc.AcceptTransferSyntaxes(_acceptedTransferSyntaxes);
                     fileLogger?.Information($"[ASSOC] PC accepted: {pc.AbstractSyntax.Name} (ID={pc.ID})");
+                }
+                else if (pc.AbstractSyntax.StorageCategory != DicomStorageCategory.None)
+                {
+                    // A modality that has this port configured as its image destination is misconfigured
+                    // - images belong on the Store SCP port. Accept anyway so the study is not lost: the
+                    // instance is written to the SCP folder and CARE_SCU_Service uploads it from there.
+                    // Whatever the modality proposes is accepted, because the file is written to disk
+                    // exactly as received and its pixel data is never decoded here.
+                    pc.AcceptTransferSyntaxes(pc.GetTransferSyntaxes().ToArray());
+                    fileLogger?.Warning($"[ASSOC] Storage PC accepted on worklist port: {pc.AbstractSyntax.Name} (ID={pc.ID}) from AE={association.CallingAE} IP={association.RemoteHost}. Configure this modality to send images to the Store SCP port.");
                 }
                 else
                 {
@@ -297,6 +325,68 @@ namespace Worklist_SCP
         public void Clean()
         {
             // cleanup, like cancel outstanding move- or get-jobs
+        }
+
+
+        /// <summary>
+        /// Handles an image sent to the worklist port by a modality that should have been pointed at the
+        /// Store SCP port. This service has no upload path of its own, so it only drops the instance into
+        /// the SCP folder using the same layout the Store SCP writes. CARE_SCU_Service already scans that
+        /// folder on its timer and uploads to the CARE backend, so nothing further is needed here.
+        /// </summary>
+        public async Task<DicomCStoreResponse> OnCStoreRequestAsync(DicomCStoreRequest request)
+        {
+            string studyUid = request.Dataset.GetSingleValue<string>(DicomTag.StudyInstanceUID).Trim();
+            string instUid = request.SOPInstanceUID.UID;
+
+            fileLogger?.Warning($"[MWL][C-STORE] Image received on the worklist port from AE={Association.CallingAE} IP={Association.RemoteHost} StudyInstanceUID={studyUid} SOPInstanceUID={instUid}");
+
+            if (!validateServer(Association.CallingAE, Association.RemoteHost))
+            {
+                fileLogger?.Error($"[MWL][C-STORE] Rejected AE={Association.CallingAE}");
+                return new DicomCStoreResponse(request, DicomStatus.ProcessingFailure);
+            }
+
+            try
+            {
+                string storageFolder = Path.Combine(WorklistServer.GetScpFolder(), studyUid);
+                if (!Directory.Exists(storageFolder))
+                {
+                    Directory.CreateDirectory(storageFolder);
+                }
+
+                string filePath = Path.Combine(storageFolder, instUid) + ".dcm";
+                await request.File.SaveAsync(filePath);
+
+                if (!File.Exists(filePath))
+                {
+                    fileLogger?.Error($"[MWL][C-STORE] File was not written to {filePath}; the SCU service will have nothing to upload.");
+                    return new DicomCStoreResponse(request, DicomStatus.ProcessingFailure);
+                }
+
+                fileLogger?.Information($"[MWL][C-STORE] Transferred to SCP folder, awaiting upload by the SCU service");
+                fileLogger?.Information($"[MWL][C-STORE]   - Calling AE: {Association.CallingAE}");
+                fileLogger?.Information($"[MWL][C-STORE]   - Patient ID: {request.Dataset.GetSingleValueOrDefault(DicomTag.PatientID, "N/A")}");
+                fileLogger?.Information($"[MWL][C-STORE]   - Accession Number: {request.Dataset.GetSingleValueOrDefault(DicomTag.AccessionNumber, "N/A")}");
+                fileLogger?.Information($"[MWL][C-STORE]   - Modality: {request.Dataset.GetSingleValueOrDefault(DicomTag.Modality, "N/A")}");
+                fileLogger?.Information($"[MWL][C-STORE]   - Study UID: {studyUid}");
+                fileLogger?.Information($"[MWL][C-STORE]   - Instance UID: {instUid}");
+                fileLogger?.Information($"[MWL][C-STORE]   - File Path: {filePath}");
+            }
+            catch (Exception ex)
+            {
+                fileLogger?.Error($"[MWL][C-STORE] Writing StudyInstanceUID={studyUid} SOPInstanceUID={instUid} to the SCP folder failed with exception : " + ex.Message);
+                return new DicomCStoreResponse(request, DicomStatus.ProcessingFailure);
+            }
+
+            return new DicomCStoreResponse(request, DicomStatus.Success);
+        }
+
+
+        public Task OnCStoreRequestExceptionAsync(string tempFileName, Exception e)
+        {
+            // let library handle logging and error response
+            return Task.CompletedTask;
         }
 
 
@@ -348,20 +438,24 @@ namespace Worklist_SCP
             //Logger.Log(LogLevel.Info, $"receiving N-Set with SOPUID {requestedSopInstanceUID}");.I
             fileLogger.Information($"receiving N-Set with SOPUID {requestedSopInstanceUID}");
 
-            var status = request.Dataset.GetSingleValue<string>(DicomTag.PerformedProcedureStepStatus);
+            var status = request.Dataset.GetSingleValueOrDefault(DicomTag.PerformedProcedureStepStatus, string.Empty);
             if (status == "COMPLETED")
             {
                 // most vendors send some informations with the mpps-completed message. 
                 // this information should be stored into the datbase
                 var doseDescription = request.Dataset.GetSingleValueOrDefault(DicomTag.CommentsOnRadiationDose, string.Empty);
                 var listOfInstanceUIDs = new List<string>();
-                foreach (var seriesDataset in request.Dataset.GetSequence(DicomTag.PerformedSeriesSequence))
+                // PerformedSeriesSequence is optional in practice - some modalities omit it - so a missing
+                // one must not throw and fail the N-SET.
+                request.Dataset.TryGetSequence(DicomTag.PerformedSeriesSequence, out var performedSeries);
+                foreach (var seriesDataset in performedSeries?.Items ?? new List<DicomDataset>())
                 {
                     // you can read here some information about the series that the modalidy created
                     //seriesDataset.Get(DicomTag.SeriesDescription, string.Empty);
                     //seriesDataset.Get(DicomTag.PerformingPhysicianName, string.Empty);
                     //seriesDataset.Get(DicomTag.ProtocolName, string.Empty);
-                    foreach (var instanceDataset in seriesDataset.GetSequence(DicomTag.ReferencedImageSequence))
+                    seriesDataset.TryGetSequence(DicomTag.ReferencedImageSequence, out var referencedImages);
+                    foreach (var instanceDataset in referencedImages?.Items ?? new List<DicomDataset>())
                     {
                         // here you can read the SOPClassUID and SOPInstanceUID
                         var instanceUID = instanceDataset.GetSingleValueOrDefault(DicomTag.ReferencedSOPInstanceUID, string.Empty);
@@ -372,6 +466,7 @@ namespace Worklist_SCP
                     }
                 }
                 var ok = MppsSource.SetCompleted(requestedSopInstanceUID, doseDescription, listOfInstanceUIDs);
+                fileLogger.Information($"[MPPS][N-SET] COMPLETED result={ok} for SOPInstanceUID={requestedSopInstanceUID} ({listOfInstanceUIDs.Count} referenced instances)");
 
                 return new DicomNSetResponse(request, ok ? DicomStatus.Success : DicomStatus.ProcessingFailure);
             }
@@ -380,11 +475,13 @@ namespace Worklist_SCP
                 // some vendors send a reason code or description with the mpps-discontinued message
                 // var reason = request.Dataset.Get(DicomTag.PerformedProcedureStepDiscontinuationReasonCodeSequence);
                 var ok = MppsSource.SetDiscontinued(requestedSopInstanceUID, string.Empty);
+                fileLogger.Information($"[MPPS][N-SET] DISCONTINUED result={ok} for SOPInstanceUID={requestedSopInstanceUID}");
 
                 return new DicomNSetResponse(request, ok ? DicomStatus.Success : DicomStatus.ProcessingFailure);
             }
             else
             {
+                fileLogger.Warning($"[MPPS][N-SET] Rejected status '{status}' for SOPInstanceUID={requestedSopInstanceUID} - only COMPLETED or DISCONTINUED are accepted");
                 return new DicomNSetResponse(request, DicomStatus.InvalidAttributeValue);
             }
         }
